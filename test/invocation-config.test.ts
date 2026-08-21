@@ -19,7 +19,7 @@ function makeConfig(overrides: Partial<AgentConfig> = {}): AgentConfig {
 }
 
 describe("resolveAgentInvocationConfig", () => {
-  it("prefers agent config over tool-call params for locked fields", () => {
+  it("prefers agent config for model; removed params no longer affect thinking/turns/isolated", () => {
     const resolved = resolveAgentInvocationConfig(
       makeConfig({
         model: "provider/config-model",
@@ -32,69 +32,57 @@ describe("resolveAgentInvocationConfig", () => {
       }),
       {
         model: "provider/param-model",
-        thinking: "minimal",
-        max_turns: 1,
-        inherit_context: true,
         run_in_background: true,
-        isolated: true,
         isolation: "worktree",
       },
     );
 
     expect(resolved.modelInput).toBe("provider/config-model");
     expect(resolved.modelFromParams).toBe(false);
+    // Frontmatter-driven knobs (not per-call params anymore).
     expect(resolved.thinking).toBe("high");
     expect(resolved.maxTurns).toBe(42);
     expect(resolved.inheritContext).toBe(false);
+    // runInBackground: config wins over the (still-allowed) param.
     expect(resolved.runInBackground).toBe(false);
     expect(resolved.isolated).toBe(false);
     expect(resolved.isolation).toBe("worktree");
   });
 
-  it("uses tool-call params when no agent config is available", () => {
+  it("uses tool-call model param when no agent config is available", () => {
     const resolved = resolveAgentInvocationConfig(undefined, {
       model: "provider/param-model",
-      thinking: "minimal",
-      max_turns: 3,
-      inherit_context: true,
       run_in_background: true,
-      isolated: true,
       isolation: "worktree",
     });
 
     expect(resolved.modelInput).toBe("provider/param-model");
     expect(resolved.modelFromParams).toBe(true);
-    expect(resolved.thinking).toBe("minimal");
-    expect(resolved.maxTurns).toBe(3);
-    expect(resolved.inheritContext).toBe(true);
+    // No frontmatter → frontmatter-driven knobs fall back to defaults.
+    expect(resolved.thinking).toBeUndefined();
+    expect(resolved.maxTurns).toBeUndefined();
+    expect(resolved.inheritContext).toBe(false);
     expect(resolved.runInBackground).toBe(true);
-    expect(resolved.isolated).toBe(true);
+    expect(resolved.isolated).toBe(false);
     expect(resolved.isolation).toBe("worktree");
   });
 
-  it("lets parent fill in booleans when config leaves them undefined", () => {
+  it("lets the param fill runInBackground when config leaves it undefined", () => {
     const resolved = resolveAgentInvocationConfig(
       makeConfig({
-        inheritContext: undefined,
         runInBackground: undefined,
-        isolated: undefined,
       }),
       {
-        inherit_context: true,
         run_in_background: true,
-        isolated: true,
       },
     );
 
-    expect(resolved.inheritContext).toBe(true);
     expect(resolved.runInBackground).toBe(true);
-    expect(resolved.isolated).toBe(true);
   });
 
   it("defaults booleans to false when neither config nor params set them", () => {
     const resolved = resolveAgentInvocationConfig(
       makeConfig({
-        inheritContext: undefined,
         runInBackground: undefined,
         isolated: undefined,
       }),

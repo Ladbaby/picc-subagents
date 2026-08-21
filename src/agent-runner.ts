@@ -35,8 +35,6 @@ import type { SubagentType, ThinkingLevel } from "./types.js";
  */
 export const SUBAGENT_TOOL_NAMES = {
   AGENT: "Agent",
-  GET_RESULT: "get_subagent_result",
-  STEER: "steer_subagent",
 } as const;
 
 /** Names of tools registered by this extension that subagents must NOT inherit. */

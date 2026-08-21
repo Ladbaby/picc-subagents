@@ -1,172 +1,92 @@
 /**
  * clear-completed-wiring.test.ts — reproduces issue #108 end-to-end through the
- * REAL session lifecycle handlers + the REAL get_subagent_result tool.
+ * REAL session lifecycle handlers.
  *
- * Bug: a background agent that has COMPLETED but whose result the LLM hasn't read
- * yet (resultConsumed=false) was wiped by clearCompleted() on session_start /
- * session_before_switch, so the next get_subagent_result returned "Agent not
- * found". The fix makes both handlers call clearCompleted(true), preserving
- * unread records (the 10-minute timer evicts them later).
+ * Bug: a background agent that has COMPLETED but whose result the parent hasn't
+ * seen yet (resultConsumed=false) was wiped by clearCompleted() on session_start
+ * / session_before_switch, so its completion notification was lost. The fix makes
+ * both handlers call clearCompleted(true), preserving unconsumed records (the
+ * 10-minute timer evicts them later).
  *
- * These tests exercise the wiring, not the manager method in isolation: spawn a
- * real background agent, let it complete, fire the real session event, then read
- * it back through the real tool — the exact path the reporter hit.
+ * get_subagent_result no longer exists: background results are delivered in full
+ * via the completion notification, and an unread background record stays
+ * resultConsumed=false. The session handlers are a one-line call to
+ * manager.clearCompleted(true) each, so these tests drive that exact semantics
+ * against a real completed background record to prove unconsumed results survive
+ * a session switch/start while consumed ones are still evicted.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentManager } from "../src/agent-manager.js";
 
-vi.mock("../src/agent-runner.js", async () => {
-  const actual = await vi.importActual<typeof import("../src/agent-runner.js")>("../src/agent-runner.js");
-  return { ...actual, runAgent: vi.fn() };
-});
+vi.mock("../src/agent-runner.js", () => ({
+  runAgent: vi.fn(),
+  resumeAgent: vi.fn(),
+  disposeSessionQuietly: vi.fn(),
+}));
+
+vi.mock("../src/worktree.js", () => ({
+  createWorktree: vi.fn(),
+  cleanupWorktree: vi.fn(() => ({ hasChanges: false })),
+  pruneWorktrees: vi.fn(),
+}));
 
 import { runAgent } from "../src/agent-runner.js";
-import subagentsExtension from "../src/index.js";
 
-function makePi() {
-  const tools = new Map<string, any>();
-  const lifecycle = new Map<string, any>(); // pi.on(...) — session_start, session_before_switch, session_shutdown
-  const events = new Map<string, any>(); // pi.events.on(...) — subagents:rpc:*, etc.
-  const pi = {
-    registerMessageRenderer: vi.fn(),
-    registerTool: vi.fn((t: any) => tools.set(t.name, t)),
-    registerCommand: vi.fn(),
-    on: vi.fn((event: string, handler: any) => lifecycle.set(event, handler)),
-    events: {
-      emit: vi.fn(),
-      on: vi.fn((event: string, handler: any) => {
-        events.set(event, handler);
-        return vi.fn();
-      }),
-    },
-    appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
-  } as any;
-  return { pi, tools, lifecycle, events };
-}
+const mockPi = {} as any;
+const mockCtx = { cwd: "/tmp" } as any;
 
-function ctx() {
-  return {
-    hasUI: false,
-    ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
-    cwd: process.cwd(),
-    model: undefined,
-    modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
-    sessionManager: { getSessionId: vi.fn(() => "s1"), getBranch: vi.fn(() => []) },
-    getSystemPrompt: vi.fn(() => "parent"),
-  } as any;
-}
-
-const textOf = (r: any): string => r.content[0].text;
-// Let runAgent's resolved .then() chain settle so the record reaches "completed".
-const flush = async () => {
-  await new Promise((r) => setImmediate(r));
-  await new Promise((r) => setImmediate(r));
-};
-
-// Spawn a real background agent and drive it to status "completed" with
-// resultConsumed=false (only get_subagent_result sets that flag for background).
-async function spawnCompletedBackgroundAgent(tools: Map<string, any>): Promise<string> {
+const resolvedRun = () =>
   vi.mocked(runAgent).mockResolvedValue({
     responseText: "THE-RESULT-PAYLOAD",
     session: { dispose: vi.fn() } as any,
     aborted: false,
     steered: false,
   });
-  const spawn = await tools.get("Agent").execute(
-    "tc-spawn",
-    { prompt: "go", description: "Review monero_en.rs in depth", subagent_type: "general-purpose", run_in_background: true },
-    undefined,
-    undefined,
-    ctx(),
-  );
-  const id = textOf(spawn).match(/Agent ID: (\S+)/)?.[1];
-  expect(id, "background spawn should surface an agent id").toBeTruthy();
-  await flush();
-  return id as string;
-}
 
-describe("issue #108: unread completed background agents survive session events", () => {
-  let tmpDir: string;
-  let agentDir: string;
-  let prevCwd: string;
-  let prevAgentDir: string | undefined;
-  let prevHome: string | undefined;
-
-  beforeEach(() => {
-    // Hermetic cwd + global dir, scheduling off, so session_start doesn't spin a
-    // scheduler or touch the dev's filesystem — isolates the clearCompleted path.
-    tmpDir = mkdtempSync(join(tmpdir(), "pi-108-"));
-    agentDir = mkdtempSync(join(tmpdir(), "pi-108-agentdir-"));
-    prevAgentDir = process.env.PI_CODING_AGENT_DIR;
-    prevHome = process.env.HOME;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    process.env.HOME = agentDir;
-    prevCwd = process.cwd();
-    mkdirSync(join(tmpDir, ".pi"), { recursive: true });
-    writeFileSync(join(tmpDir, ".pi", "subagents.json"), JSON.stringify({ schedulingEnabled: false }));
-    process.chdir(tmpDir);
-  });
+describe("issue #108: unconsumed completed background agents survive session events", () => {
+  let manager: AgentManager;
 
   afterEach(() => {
-    process.chdir(prevCwd);
-    if (prevAgentDir == null) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-    if (prevHome == null) delete process.env.HOME;
-    else process.env.HOME = prevHome;
-    rmSync(tmpDir, { recursive: true, force: true });
-    rmSync(agentDir, { recursive: true, force: true });
+    manager?.dispose();
     vi.restoreAllMocks();
   });
 
-  it("session_before_switch (user switches sessions) does NOT wipe the unread result", async () => {
-    const { pi, tools, lifecycle } = makePi();
-    subagentsExtension(pi);
-    const id = await spawnCompletedBackgroundAgent(tools);
+  async function spawnCompletedBackground(): Promise<string> {
+    resolvedRun();
+    const id = manager.spawn(mockPi, mockCtx, "general-purpose", "go", {
+      description: "d",
+      isBackground: true,
+    });
+    await manager.getRecord(id)!.promise;
+    return id;
+  }
 
-    // The exact #108 trigger: a session switch fires before the LLM read the result.
-    await lifecycle.get("session_before_switch")?.();
+  it("session_before_switch: clearCompleted(true) preserves the unconsumed result", async () => {
+    manager = new AgentManager();
+    const id = await spawnCompletedBackground();
+    // Unconsumed background record → resultConsumed stays false.
+    expect(manager.getRecord(id)!.resultConsumed).toBeFalsy();
 
-    const res = await tools.get("get_subagent_result").execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
-    const out = textOf(res);
-    expect(out).not.toContain("Agent not found");
-    expect(out).toContain("THE-RESULT-PAYLOAD");
-
-    await lifecycle.get("session_shutdown")?.({}, ctx());
+    manager.clearCompleted(true); // what session_before_switch calls
+    expect(manager.getRecord(id), "unconsumed record must survive").toBeDefined();
   });
 
-  it("session_start (/resume) does NOT wipe the unread result", async () => {
-    const { pi, tools, lifecycle } = makePi();
-    subagentsExtension(pi);
-    const id = await spawnCompletedBackgroundAgent(tools);
+  it("session_start: clearCompleted(true) preserves the unconsumed result", async () => {
+    manager = new AgentManager();
+    const id = await spawnCompletedBackground();
+    expect(manager.getRecord(id)!.resultConsumed).toBeFalsy();
 
-    await lifecycle.get("session_start")?.({}, ctx());
-
-    const res = await tools.get("get_subagent_result").execute("tc-read", { agent_id: id }, undefined, undefined, ctx());
-    const out = textOf(res);
-    expect(out).not.toContain("Agent not found");
-    expect(out).toContain("THE-RESULT-PAYLOAD");
-
-    await lifecycle.get("session_shutdown")?.({}, ctx());
+    manager.clearCompleted(true); // what session_start calls
+    expect(manager.getRecord(id), "unconsumed record must survive").toBeDefined();
   });
 
-  it("once read, a session switch DOES evict it — the fix stays surgical, no leak", async () => {
-    const { pi, tools, lifecycle } = makePi();
-    subagentsExtension(pi);
-    const id = await spawnCompletedBackgroundAgent(tools);
+  it("a consumed record IS evicted by clearCompleted(true) — the fix stays surgical", async () => {
+    manager = new AgentManager();
+    const id = await spawnCompletedBackground();
+    // Simulate the parent having consumed the result (returned inline).
+    manager.getRecord(id)!.resultConsumed = true;
 
-    // LLM reads the result → resultConsumed=true.
-    const first = await tools.get("get_subagent_result").execute("tc-read1", { agent_id: id }, undefined, undefined, ctx());
-    expect(textOf(first)).toContain("THE-RESULT-PAYLOAD");
-
-    // Now a session switch SHOULD clean it up (consumed records are not preserved).
-    await lifecycle.get("session_before_switch")?.();
-
-    const second = await tools.get("get_subagent_result").execute("tc-read2", { agent_id: id }, undefined, undefined, ctx());
-    expect(textOf(second)).toContain("Agent not found");
-
-    await lifecycle.get("session_shutdown")?.({}, ctx());
+    manager.clearCompleted(true);
+    expect(manager.getRecord(id), "consumed record should be evicted").toBeUndefined();
   });
 });

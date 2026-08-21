@@ -91,7 +91,7 @@ export interface AgentRecord {
   promise?: Promise<string>;
   groupId?: string;
   joinMode?: JoinMode;
-  /** Set when result was already consumed via get_subagent_result — suppresses completion notification. */
+  /** Set when result was already returned inline to the caller — suppresses completion notification. */
   resultConsumed?: boolean;
   /** Steering messages queued before the session was ready. */
   pendingSteers?: string[];

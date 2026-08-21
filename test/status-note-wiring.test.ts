@@ -1,8 +1,10 @@
 /**
  * status-note-wiring.test.ts — proves the status note actually reaches the
- * PARENT through the real tool handlers, not just that getStatusNote() returns
- * a string. Drives the registered `Agent` / `get_subagent_result` tools and
- * inspects the text delivered back, for a turn-limit abort and a user stop.
+ * PARENT through the real handlers, not just that getStatusNote() returns a
+ * string. For a foreground turn-limit abort the note is in the inline tool
+ * result; for a background user-stop the note is in the completion notification
+ * (get_subagent_result no longer exists — the notification is the delivery
+ * channel).
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -18,6 +20,7 @@ function makePi() {
   const tools = new Map<string, any>();
   const eventHandlers = new Map<string, any>();
   const lifecycle = new Map<string, any>();
+  const notifications: any[] = [];
   const pi = {
     registerMessageRenderer: vi.fn(),
     registerTool: vi.fn((t: any) => tools.set(t.name, t)),
@@ -31,9 +34,9 @@ function makePi() {
       }),
     },
     appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
+    sendMessage: vi.fn((msg: any) => notifications.push(msg)),
   } as any;
-  return { pi, tools, eventHandlers, lifecycle };
+  return { pi, tools, eventHandlers, lifecycle, notifications };
 }
 
 // The RPC channels are registered on the first bound session_start (#142), so a
@@ -58,6 +61,11 @@ function ctx() {
 }
 
 const textOf = (r: any): string => r.content[0].text;
+// Outlive the 200ms individual-nudge debounce + a couple setImmediate hops.
+const flush = async (ms = 400) => {
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setTimeout(r, ms));
+};
 
 describe("status note reaches the parent through the real handlers", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -84,10 +92,12 @@ describe("status note reaches the parent through the real handlers", () => {
     expect(out).not.toContain("STOPPED BY THE USER"); // not mislabelled as a user stop
   });
 
-  it("background user-stop → get_subagent_result flags STOPPED BY THE USER (not completed)", async () => {
-    // A background agent that never settles on its own — only a stop ends it.
-    vi.mocked(runAgent).mockReturnValue(new Promise(() => {}) as any);
-    const { pi, tools, eventHandlers, lifecycle } = makePi();
+  it("background user-stop → completion notification flags STOPPED BY THE USER (not completed)", async () => {
+    // A background agent that only a stop ends: hold runAgent's promise, stop it
+    // (status → 'stopped'), then let runAgent settle so the completion fires.
+    let resolveRun: (v: any) => void;
+    vi.mocked(runAgent).mockReturnValue(new Promise((r) => { resolveRun = r; }) as any);
+    const { pi, tools, eventHandlers, lifecycle, notifications } = makePi();
     subagentsExtension(pi);
     await bind(lifecycle); // register RPC channels via session_start (#142)
 
@@ -101,14 +111,17 @@ describe("status note reaches the parent through the real handlers", () => {
 
     // The user stops it — same path the viewer's stop key uses (manager.abort).
     eventHandlers.get("subagents:rpc:stop")?.({ requestId: "r1", agentId: id });
+    resolveRun!({
+      responseText: "partial",
+      session: { dispose: vi.fn() } as any,
+      aborted: false,
+      steered: false,
+    });
+    await flush();
 
-    const res = await tools.get("get_subagent_result").execute(
-      "tc3", { agent_id: id }, undefined, undefined, ctx(),
-    );
-
-    const out = textOf(res);
-    expect(out).toContain("STOPPED BY THE USER");
-    expect(out).toContain("the task was NOT finished");
-    expect(out).not.toContain("Done"); // not surfaced as a normal completion
+    const notes = notifications.map((m) => m.content).join("\n");
+    expect(notes).toContain("STOPPED BY THE USER");
+    expect(notes).toContain("the task was NOT finished");
+    expect(notes).not.toContain("Done"); // not surfaced as a normal completion
   });
 });

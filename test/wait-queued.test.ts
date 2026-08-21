@@ -1,14 +1,12 @@
 /**
- * wait-queued.test.ts — get_subagent_result(wait: true) on a QUEUED agent.
- *
- * Queued records have no promise yet (it's created when the queue starts
- * them), so the old `status === "running" && record.promise` condition
- * skipped the wait entirely and returned "still running" — forcing the
- * caller into a poll loop against the concurrency queue.
+ * wait-queued.test.ts — a QUEUED background agent, once the concurrency queue
+ * drains and it runs, delivers its full result via the completion notification
+ * (get_subagent_result no longer exists; the notification is the delivery
+ * channel and must not report a still-running/empty result).
  *
  * Wiring test through the REAL extension: spawn background agents until one
- * queues, call the real tool with wait:true, drain the queue, and assert the
- * call returns the final result.
+ * queues, drain the queue, and assert the queued agent's notification carries
+ * the final result.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -23,6 +21,7 @@ import subagentsExtension from "../src/index.js";
 function makePi() {
   const tools = new Map<string, any>();
   const lifecycle = new Map<string, any>();
+  const notifications: any[] = [];
   const pi = {
     registerMessageRenderer: vi.fn(),
     registerTool: vi.fn((t: any) => tools.set(t.name, t)),
@@ -33,9 +32,9 @@ function makePi() {
       on: vi.fn(() => vi.fn()),
     },
     appendEntry: vi.fn(),
-    sendMessage: vi.fn(),
+    sendMessage: vi.fn((m: any) => notifications.push(m)),
   } as any;
-  return { pi, tools, lifecycle };
+  return { pi, tools, lifecycle, notifications };
 }
 
 function ctx() {
@@ -87,9 +86,9 @@ async function spawnBackground(tools: Map<string, any>): Promise<{ id: string; q
   return { id, queued: textOf(r).includes("queued in background") };
 }
 
-describe("get_subagent_result wait:true on a queued agent", () => {
-  it("waits through queue start and returns the result (no 'still running')", async () => {
-    const { pi, tools, lifecycle } = makePi();
+describe("a queued background agent delivers its full result when the queue drains", () => {
+  it("completes and notifies with the final result (no 'still running')", async () => {
+    const { pi, tools, lifecycle, notifications } = makePi();
     subagentsExtension(pi);
 
     const resolvers = deferredRuns();
@@ -102,23 +101,22 @@ describe("get_subagent_result wait:true on a queued agent", () => {
     }
     expect(queuedId, "expected to hit the concurrency limit within 10 spawns").toBeDefined();
 
-    // wait:true on the QUEUED agent — must not return "still running".
-    const waitPromise = tools
-      .get("get_subagent_result")
-      .execute("tc-wait", { agent_id: queuedId, wait: true }, undefined, undefined, ctx());
-
     // Drain: resolve running agents until the queued one starts and finishes.
     let settled = false;
-    void waitPromise.then(() => { settled = true; });
-    for (let i = 0; i < 40 && !settled; i++) {
+    const drain = () => {
       while (resolvers.length > 0) resolvers.shift()!();
+    };
+    for (let i = 0; i < 40 && !settled; i++) {
+      drain();
       await flush();
       await new Promise((r) => setTimeout(r, 100)); // outlive one 250ms poll tick
+      const note = notifications.map((m) => m.content).join("\n");
+      if (note.includes(queuedId!) && note.includes("THE-RESULT-PAYLOAD")) settled = true;
     }
 
-    const result = await waitPromise;
-    expect(textOf(result)).toContain("THE-RESULT-PAYLOAD");
-    expect(textOf(result)).not.toContain("still running");
+    const note = notifications.map((m) => m.content).join("\n");
+    expect(note).toContain("THE-RESULT-PAYLOAD");
+    expect(note).not.toContain("still running");
 
     await lifecycle.get("session_shutdown")?.();
   }, 20_000);

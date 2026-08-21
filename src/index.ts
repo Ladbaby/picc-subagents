@@ -3,8 +3,6 @@
  *
  * Tools:
  *   Agent             — LLM-callable: spawn a sub-agent
- *   get_subagent_result  — LLM-callable: check background agent status/result
- *   steer_subagent       — LLM-callable: send a steering message to a running agent
  *
  * Commands:
  *   /agents                 — Interactive agent management menu
@@ -16,7 +14,7 @@ import { defineTool, type ExtensionAPI, type ExtensionCommandContext, type Exten
 import { Container, Key, matchesKey, type SettingItem, SettingsList, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { AgentManager } from "./agent-manager.js";
-import { getAgentConversation, getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns, steerAgent } from "./agent-runner.js";
+import { getDefaultMaxTurns, getGraceTurns, normalizeMaxTurns, SUBAGENT_TOOL_NAMES, setDefaultMaxTurns, setGraceTurns } from "./agent-runner.js";
 import { BUILTIN_TOOL_NAMES, getAgentConfig, getAllTypes, getAvailableTypes, isDefaultsDisabled, registerAgents, resolveType, setDefaultsDisabled } from "./agent-types.js";
 import { type RpcHandle, registerRpcHandlers } from "./cross-extension-rpc.js";
 import { loadCustomAgents } from "./custom-agents.js";
@@ -160,7 +158,7 @@ function escapeXml(s: string): string {
 }
 
 /** Format a structured task notification matching Claude Code's <task-notification> XML. */
-function formatTaskNotification(record: AgentRecord, resultMaxLen: number): string {
+function formatTaskNotification(record: AgentRecord): string {
   const status = getStatusLabel(record.status, record.error);
   const durationMs = record.completedAt ? record.completedAt - record.startedAt : 0;
   const totalTokens = getLifetimeTotal(record.lifetimeUsage);
@@ -168,11 +166,11 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number): stri
   const ctxXml = contextPercent !== null ? `<context_percent>${Math.round(contextPercent)}</context_percent>` : "";
   const compactXml = record.compactionCount ? `<compactions>${record.compactionCount}</compactions>` : "";
 
-  const resultPreview = record.result
-    ? record.result.length > resultMaxLen
-      ? record.result.slice(0, resultMaxLen) + "\n...(truncated, use get_subagent_result for full output)"
-      : record.result
-    : "No output.";
+  // The full result is inlined (matching Claude Code's <task-notification>), so
+  // the completion message is the guaranteed delivery channel — the LLM doesn't
+  // need a separate retrieval tool. The <output-file> path is the durable
+  // full-transcript fallback for anything beyond the final answer.
+  const result = record.result?.trim() || "No output.";
 
   return [
     `<task-notification>`,
@@ -181,7 +179,7 @@ function formatTaskNotification(record: AgentRecord, resultMaxLen: number): stri
     record.outputFile ? `<output-file>${escapeXml(record.outputFile)}</output-file>` : null,
     `<status>${escapeXml(status)}</status>`,
     `<summary>Agent "${escapeXml(record.description)}" ${record.status}${getStatusNote(record.status)}</summary>`,
-    `<result>${escapeXml(resultPreview)}</result>`,
+    `<result>${escapeXml(result)}</result>`,
     `<usage><total_tokens>${totalTokens}</total_tokens><tool_uses>${record.toolUses}</tool_uses>${ctxXml}${compactXml}<duration_ms>${durationMs}</duration_ms></usage>`,
     `</task-notification>`,
   ].filter(Boolean).join('\n');
@@ -294,7 +292,7 @@ export default function (pi: ExtensionAPI) {
   const agentActivity = new Map<string, AgentActivity>();
 
   // ---- Cancellable pending notifications ----
-  // Holds notifications briefly so get_subagent_result can cancel them
+  // Holds notifications briefly so a session switch can coalesce them
   // before they reach pi.sendMessage (fire-and-forget).
   const pendingNudges = new Map<string, ReturnType<typeof setTimeout>>();
   const NUDGE_HOLD_MS = 200;
@@ -319,7 +317,7 @@ export default function (pi: ExtensionAPI) {
   function emitIndividualNudge(record: AgentRecord) {
     if (record.resultConsumed) return;  // re-check at send time
 
-    const notification = formatTaskNotification(record, 500);
+    const notification = formatTaskNotification(record);
     const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : '';
 
     pi.sendMessage<NotificationDetails>({
@@ -349,7 +347,7 @@ export default function (pi: ExtensionAPI) {
         const unconsumed = records.filter(r => !r.resultConsumed);
         if (unconsumed.length === 0) { widget.update(); return; }
 
-        const notifications = unconsumed.map(r => formatTaskNotification(r, 300)).join('\n\n');
+        const notifications = unconsumed.map(r => formatTaskNotification(r)).join('\n\n');
         const label = partial
           ? `${unconsumed.length} agent(s) finished (partial — others still running)`
           : `${unconsumed.length} agent(s) finished`;
@@ -362,7 +360,7 @@ export default function (pi: ExtensionAPI) {
 
         pi.sendMessage<NotificationDetails>({
           customType: "subagent-notification",
-          content: `Background agent group completed: ${label}\n\n${notifications}\n\nUse get_subagent_result for full output.`,
+          content: `Background agent group completed: ${label}\n\n${notifications}`,
           display: true,
           details,
         }, { deliverAs: "followUp", triggerTurn: true });
@@ -415,7 +413,7 @@ export default function (pi: ExtensionAPI) {
       startedAt: record.startedAt, completedAt: record.completedAt,
     });
 
-    // Skip notification if result was already consumed via get_subagent_result
+    // Skip notification if result was already consumed (returned inline)
     if (record.resultConsumed) {
       agentActivity.delete(record.id);
       widget.markFinished(record.id);
@@ -770,7 +768,7 @@ Notes:
 - description: 3-5 words (shown in UI). Prompts must be self-contained — the agent has not seen this conversation.
 - Parallel work: one message, multiple Agent calls, run_in_background: true on each. You are notified when background agents finish — never poll or sleep.
 - The result is not shown to the user — summarize it for them. Verify an agent's claimed code changes before reporting work done.
-- resume continues a previous agent by ID; steer_subagent messages a running one.
+- Background results arrive in full in the completion notification; the transcript is at the output-file path.
 - isolation: "worktree" runs the agent in an isolated git worktree; changes land on a branch.`;
 
   const fullAgentToolDescription = `Launch a new agent to handle complex, multi-step tasks. Each agent type has specific capabilities and tools available to it.
@@ -789,16 +787,13 @@ If the target is already known, use a direct tool — \`read\` for a known path,
 - Always include a short (3-5 word) description summarizing what the agent will do (shown in UI).
 - When you launch multiple agents for independent work, send them in a single message with multiple tool uses, with run_in_background: true on each, so they run concurrently. If the user specifies that they want agents run "in parallel", you MUST send a single message with multiple tool calls. Foreground calls run sequentially — only one executes at a time.
 - When the agent is done, it returns a single message back to you. The result is not visible to the user — to show the user, send a text message with a concise summary.
+- Background agents deliver their result in full via a completion notification (do NOT poll or sleep). The notification also includes an output-file path with the full transcript if you need more than the final answer.
 - Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting work as done.
 - Use run_in_background for work you don't need immediately. You will be notified when it completes — do NOT poll or sleep waiting for it. Continue with other work or respond to the user instead.
 - Foreground vs background: use foreground (default) when you need the agent's results before you can proceed. Use background when you have genuinely independent work to do in parallel.
-- Use resume with an agent ID to continue a previous agent's work. A new (non-resume) Agent call starts a fresh agent with no memory of prior runs, so the prompt must be self-contained.
-- Use steer_subagent to send mid-run messages to a running background agent.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, etc.), since it is not aware of the user's intent.
 - If an agent's description says it should be used proactively, try to use it without the user having to ask for it first.
 - Use model to specify a different model (as "provider/modelId", or fuzzy e.g. "haiku", "sonnet").
-- Use thinking to control extended thinking level.
-- Use inherit_context if the agent needs the parent conversation history.
 - Use isolation: "worktree" to run the agent in an isolated git worktree (safe parallel file modifications). The worktree is automatically cleaned up if the agent makes no changes; otherwise the path and branch are returned in the result.${scheduleGuideline}
 
 ## Writing the prompt
@@ -868,60 +863,34 @@ Terse command-style prompts produce shallow, generic work.
     promptSnippet: "Launch autonomous sub-agents for complex multi-step tasks",
     promptGuidelines: [
       "Use the Agent tool with specialized agents when the task at hand matches the agent's description. Subagents are valuable for parallelizing independent queries or for protecting the main context window from excessive results, but they should not be used excessively when not needed. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself.",
-			"For broad codebase exploration or research that'll take more than 3 queries, spawn Agent with subagent_type=Explore. Otherwise use the glob or grep directly."
+      "For broad codebase exploration or research that'll take more than 3 queries, spawn Agent with subagent_type=Explore. Otherwise use the glob or grep directly."
     ],
     parameters: Type.Object({
-			description: Type.String({
-				description: "A short (3-5 word) description of the task.",
-			}),
-			isolation: Type.Optional(
+      description: Type.String({
+        description: "A short (3-5 word) description of the task.",
+      }),
+      isolation: Type.Optional(
         Type.Literal("worktree", {
           description: 'Isolation mode. "worktree" creates a temporary git worktree so the agent works on an isolated copy of the repo.',
         }),
       ),
-			model: Type.Optional(
-				Type.String({
-					description:
-						"Optional model override for this agent. Takes precedence over the agent definition's model frontmatter. If omitted, uses the agent definition's model, or inherits from the parent.",
-				}),
-			),
+      model: Type.Optional(
+        Type.String({
+          description:
+            "Optional model override for this agent. Takes precedence over the agent definition's model frontmatter. If omitted, uses the agent definition's model, or inherits from the parent.",
+        }),
+      ),
       prompt: Type.String({
         description: "The task for the agent to perform.",
       }),
-			run_in_background: Type.Optional(
-				Type.Boolean({
-					description: "Set to true to run in background. Returns agent ID immediately. You will be notified on completion.",
-				}),
-			),
+      run_in_background: Type.Optional(
+        Type.Boolean({
+          description: "Set to true to run this agent in the background. You will be notified when it completes.",
+        }),
+      ),
       subagent_type: Type.String({
         description: `The type of specialized agent to use for this task.`,
       }),
-      thinking: Type.Optional(
-        Type.String({
-          description: `Thinking level: ${THINKING_LEVELS.join(", ")}. Overrides agent default.`,
-        }),
-      ),
-      max_turns: Type.Optional(
-        Type.Number({
-          description: "Maximum number of agentic turns before stopping. Omit for unlimited (default).",
-          minimum: 1,
-        }),
-      ),
-      resume: Type.Optional(
-        Type.String({
-          description: "Optional agent ID to resume from. Continues from previous context.",
-        }),
-      ),
-      isolated: Type.Optional(
-        Type.Boolean({
-          description: "If true, agent gets no extension/MCP tools — only built-in tools.",
-        }),
-      ),
-      inherit_context: Type.Optional(
-        Type.Boolean({
-          description: "If true, fork parent conversation into the agent. Default: false (fresh context).",
-        }),
-      ),
       ...scheduleParam,
     }),
 
@@ -982,7 +951,7 @@ Terse command-style prompts produce shallow, generic work.
               line += "\n" + theme.fg("dim", `  ${l}`);
             }
             if (resultText.split("\n").length > 50) {
-              line += "\n" + theme.fg("muted", "  ... (use get_subagent_result with verbose for full output)");
+              line += "\n" + theme.fg("muted", "  … (truncated in this view; full result in the notification)");
             }
           }
         } else {
@@ -1134,12 +1103,6 @@ Terse command-style prompts produce shallow, generic work.
         if (!isSchedulingEnabled()) {
           return textResult("Scheduling is disabled in this project. Enable via /agents → Settings → Scheduling.");
         }
-        if (params.resume) {
-          return textResult("Cannot combine `schedule` with `resume` — schedules create fresh agents.");
-        }
-        if (params.inherit_context) {
-          return textResult("Cannot combine `schedule` with `inherit_context` — there is no parent conversation at fire time.");
-        }
         if (params.run_in_background === false) {
           return textResult("Cannot combine `schedule` with `run_in_background: false` — scheduled jobs always run in background.");
         }
@@ -1168,30 +1131,6 @@ Terse command-style prompts produce shallow, generic work.
         } catch (err) {
           return textResult(err instanceof Error ? err.message : String(err));
         }
-      }
-
-      // Resume existing agent
-      if (params.resume) {
-        const existing = manager.getRecord(params.resume);
-        if (!existing) {
-          return textResult(`Agent not found: "${params.resume}". It may have been cleaned up.`);
-        }
-        if (!existing.session) {
-          return textResult(`Agent "${params.resume}" has no active session to resume.`);
-        }
-        const record = await manager.resume(params.resume, params.prompt, signal);
-        if (!record) {
-          return textResult(`Failed to resume agent "${params.resume}".`);
-        }
-        // A failed resume surfaces the error, plus any partial output THIS
-        // resume produced (never the previous turn's answer, #144).
-        if (record.status === "error") {
-          return textResult(`Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(detailBase, record));
-        }
-        return textResult(
-          record.result?.trim() || "No output.",
-          buildDetails(detailBase, record),
-        );
       }
 
       // Background execution
@@ -1272,8 +1211,7 @@ Terse command-style prompts produce shallow, generic work.
           `Description: ${params.description}\n` +
           (record?.outputFile ? `Output file: ${record.outputFile}\n` : "") +
           (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
-          `\nYou will be notified when this agent completes.\n` +
-          `Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.\n` +
+          `\nYou will be notified when this agent completes — do NOT poll or sleep waiting for it. The full result arrives in that notification.\n` +
           `Do not duplicate this agent's work.`,
           { ...detailBase, toolUses: 0, tokens: "", durationMs: 0, status: "background" as const, agentId: id },
         );
@@ -1400,145 +1338,6 @@ Terse command-style prompts produce shallow, generic work.
       );
     },
   }));
-
-  // ---- get_subagent_result tool ----
-
-  pi.registerTool(defineTool({
-    name: SUBAGENT_TOOL_NAMES.GET_RESULT,
-    label: "Get Agent Result",
-    description:
-      "Check status and retrieve results from a background agent. Use the agent ID returned by Agent with run_in_background.",
-    promptSnippet: "Check status and retrieve results from a background agent",
-    parameters: Type.Object({
-      agent_id: Type.String({
-        description: "The agent ID to check.",
-      }),
-      wait: Type.Optional(
-        Type.Boolean({
-          description: "If true, wait for the agent to complete before returning. Default: false.",
-        }),
-      ),
-      verbose: Type.Optional(
-        Type.Boolean({
-          description: "If true, include the agent's full conversation (messages + tool calls). Default: false.",
-        }),
-      ),
-    }),
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const record = manager.getRecord(params.agent_id);
-      if (!record) {
-        return textResult(`Agent not found: "${params.agent_id}". It may have been cleaned up.`);
-      }
-
-      // Wait for completion if requested.
-      // Pre-mark resultConsumed BEFORE awaiting: onComplete fires inside .then()
-      // (attached earlier at spawn time) and always runs before this await resumes.
-      // Setting the flag here prevents a redundant follow-up notification.
-      // Queued agents have no promise yet (it's created when the queue starts
-      // them), so poll until they leave the queue, then await like a running one.
-      if (params.wait && (record.status === "running" || record.status === "queued")) {
-        record.resultConsumed = true;
-        cancelNudge(params.agent_id);
-        while (record.status === "queued") {
-          await new Promise((r) => setTimeout(r, 250));
-        }
-        if (record.promise) await record.promise;
-      }
-
-      const displayName = getDisplayName(record.type);
-      const duration = formatDuration(record.startedAt, record.completedAt);
-      const tokens = formatLifetimeTokens(record);
-      const contextPercent = getSessionContextPercent(record.session);
-      const statsParts = [`Tool uses: ${record.toolUses}`];
-      if (tokens) statsParts.push(tokens);
-      if (contextPercent !== null) statsParts.push(`Context: ${Math.round(contextPercent)}%`);
-      if (record.compactionCount) statsParts.push(`Compactions: ${record.compactionCount}`);
-      statsParts.push(`Duration: ${duration}`);
-
-      let output =
-        `Agent: ${record.id}\n` +
-        `Type: ${displayName} | Status: ${record.status}${getStatusNote(record.status)} | ${statsParts.join(" | ")}\n` +
-        `Description: ${record.description}\n\n`;
-
-      if (record.status === "running") {
-        output += "Agent is still running. Use wait: true or check back later.";
-      } else if (record.status === "error") {
-        output += `Error: ${record.error}${partialOutputSuffix(record)}`;
-      } else {
-        output += record.result?.trim() || "No output.";
-      }
-
-      // Mark result as consumed — suppresses the completion notification
-      if (record.status !== "running" && record.status !== "queued") {
-        record.resultConsumed = true;
-        cancelNudge(params.agent_id);
-      }
-
-      // Verbose: include full conversation
-      if (params.verbose && record.session) {
-        const conversation = getAgentConversation(record.session);
-        if (conversation) {
-          output += `\n\n--- Agent Conversation ---\n${conversation}`;
-        }
-      }
-
-      return textResult(output);
-    },
-  }));
-
-  // ---- steer_subagent tool ----
-
-  pi.registerTool(defineTool({
-    name: SUBAGENT_TOOL_NAMES.STEER,
-    label: "Steer Agent",
-    description:
-      "Send a steering message to a running agent. The message will interrupt the agent after its current tool execution " +
-      "and be injected into its conversation, allowing you to redirect its work mid-run. Only works on running agents.",
-    promptSnippet: "Send a steering message to redirect a running background agent",
-    parameters: Type.Object({
-      agent_id: Type.String({
-        description: "The agent ID to steer (must be currently running).",
-      }),
-      message: Type.String({
-        description: "The steering message to send. This will appear as a user message in the agent's conversation.",
-      }),
-    }),
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const record = manager.getRecord(params.agent_id);
-      if (!record) {
-        return textResult(`Agent not found: "${params.agent_id}". It may have been cleaned up.`);
-      }
-      if (record.status !== "running") {
-        return textResult(`Agent "${params.agent_id}" is not running (status: ${record.status}). Cannot steer a non-running agent.`);
-      }
-      if (!record.session) {
-        // Session not ready yet — queue the steer for delivery once initialized
-        if (!record.pendingSteers) record.pendingSteers = [];
-        record.pendingSteers.push(params.message);
-        pi.events.emit("subagents:steered", { id: record.id, message: params.message });
-        return textResult(`Steering message queued for agent ${record.id}. It will be delivered once the session initializes.`);
-      }
-
-      try {
-        await steerAgent(record.session, params.message);
-        pi.events.emit("subagents:steered", { id: record.id, message: params.message });
-        const tokens = formatLifetimeTokens(record);
-        const contextPercent = getSessionContextPercent(record.session);
-        const stateParts: string[] = [];
-        if (tokens) stateParts.push(tokens);
-        stateParts.push(`${record.toolUses} tool ${record.toolUses === 1 ? "use" : "uses"}`);
-        if (contextPercent !== null) stateParts.push(`context ${Math.round(contextPercent)}% full`);
-        if (record.compactionCount) stateParts.push(`${record.compactionCount} compaction${record.compactionCount === 1 ? "" : "s"}`);
-        return textResult(
-          `Steering message sent to agent ${record.id}. The agent will process it after its current tool execution.\n` +
-          `Current state: ${stateParts.join(" · ")}`,
-        );
-      } catch (err) {
-        return textResult(`Failed to steer agent: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-  }));
-
   // ---- /agents interactive menu ----
 
   const projectAgentsDir = () => join(process.cwd(), ".pi", "agents");
