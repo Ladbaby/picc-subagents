@@ -1930,7 +1930,7 @@ Terse command-style prompts produce shallow, generic work.
     const targetDir = location.startsWith("Project") ? projectAgentsDir() : personalAgentsDir();
 
     const method = await ctx.ui.select("Creation method", [
-      "Generate with Claude (recommended)",
+      "Generate with Pi (recommended)",
       "Manual configuration",
     ]);
     if (!method) return;
