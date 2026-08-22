@@ -87,9 +87,13 @@ describe("agent type registry", () => {
 
     it("Explore has read-only tools", () => {
       const config = getConfig("Explore");
-      expect(config.builtinToolNames).toEqual(["read", "bash", "grep", "find", "ls"]);
+      expect(config.builtinToolNames).toEqual(["read", "bash"]);
       expect(config.builtinToolNames).not.toContain("edit");
       expect(config.builtinToolNames).not.toContain("write");
+      // grep/find/ls come from the picc-grep / picc-glob extensions, not the built-ins.
+      expect(config.builtinToolNames).not.toContain("grep");
+      expect(config.builtinToolNames).not.toContain("find");
+      expect(config.builtinToolNames).not.toContain("ls");
     });
 
     it("Explore has haiku model in config", () => {
