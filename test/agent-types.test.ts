@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   BUILTIN_TOOL_NAMES,
+  DEFAULT_BUILTIN_TOOL_NAMES,
   getAgentConfig,
   getAvailableTypes,
   getConfig,
@@ -79,7 +80,7 @@ describe("agent type registry", () => {
     it("returns correct config for default types", () => {
       const config = getConfig("general-purpose");
       expect(config.displayName).toBe("Agent");
-      expect(config.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
+      expect(config.builtinToolNames).toEqual(DEFAULT_BUILTIN_TOOL_NAMES);
       expect(config.extensions).toBe(true);
       expect(config.skills).toBe(true);
     });
@@ -129,6 +130,14 @@ describe("agent type registry", () => {
       expect(BUILTIN_TOOL_NAMES).toContain("find");
       expect(BUILTIN_TOOL_NAMES).toContain("ls");
       expect(BUILTIN_TOOL_NAMES.length).toBeGreaterThanOrEqual(7);
+    });
+
+    it("DEFAULT_BUILTIN_TOOL_NAMES matches the main-agent default active set", () => {
+      expect(DEFAULT_BUILTIN_TOOL_NAMES).toEqual(["read", "bash", "edit", "write"]);
+      // The read-only-only tools stay hidden by default, like the main agent.
+      expect(DEFAULT_BUILTIN_TOOL_NAMES).not.toContain("grep");
+      expect(DEFAULT_BUILTIN_TOOL_NAMES).not.toContain("find");
+      expect(DEFAULT_BUILTIN_TOOL_NAMES).not.toContain("ls");
     });
   });
 
@@ -180,7 +189,7 @@ describe("agent type registry", () => {
 
       const config = getConfig("general-purpose");
       expect(config.displayName).toBe("Agent");
-      expect(config.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
+      expect(config.builtinToolNames).toEqual(DEFAULT_BUILTIN_TOOL_NAMES);
       expect(config.promptMode).toBe("append");
     });
   });

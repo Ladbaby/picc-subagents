@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BUILTIN_TOOL_NAMES } from "../src/agent-types.js";
+import { BUILTIN_TOOL_NAMES, DEFAULT_BUILTIN_TOOL_NAMES } from "../src/agent-types.js";
 import { loadCustomAgents } from "../src/custom-agents.js";
 
 describe("loadCustomAgents", () => {
@@ -146,7 +146,7 @@ Just a prompt.`);
 
     expect(agent.name).toBe("minimal");
     expect(agent.description).toBe("minimal"); // defaults to filename
-    expect(agent.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES); // all tools
+    expect(agent.builtinToolNames).toEqual(DEFAULT_BUILTIN_TOOL_NAMES); // default active set
     expect(agent.extensions).toBe(true); // inherit all
     expect(agent.skills).toBe(true); // inherit all
     expect(agent.model).toBeUndefined();
@@ -169,7 +169,7 @@ Just a prompt.`);
 
     expect(agent.name).toBe("bare");
     expect(agent.description).toBe("bare");
-    expect(agent.builtinToolNames).toEqual(BUILTIN_TOOL_NAMES);
+    expect(agent.builtinToolNames).toEqual(DEFAULT_BUILTIN_TOOL_NAMES);
     expect(agent.systemPrompt).toBe("Just a system prompt, no frontmatter.");
   });
 

@@ -21,6 +21,15 @@ export const BUILTIN_TOOL_NAMES: string[] = [
   ...new Set([...createCodingTools("."), ...createReadOnlyTools(".")].map((t) => t.name)),
 ];
 
+/**
+ * The default built-in tool set for agents that omit `builtinToolNames`.
+ * Matches pi's main-agent default active set (read/bash/edit/write) so a
+ * spawned subagent is scoped identically to the parent by default. The other
+ * built-ins (grep/find/ls) remain registered-but-inactive — exactly like the
+ * main agent — and can still be opted into per-agent via `builtinToolNames`.
+ */
+export const DEFAULT_BUILTIN_TOOL_NAMES: string[] = createCodingTools(".").map((t) => t.name);
+
 /** Unified runtime registry of all agents (defaults + user-defined). */
 const agents = new Map<string, AgentConfig>();
 
@@ -133,9 +142,10 @@ export function getToolNamesForType(type: string): string[] {
   const key = resolveKey(type);
   const raw = key ? agents.get(key) : undefined;
   const config = raw?.enabled !== false ? raw : undefined;
-  // `undefined` (definition omitted the field) → all built-ins; an explicit `[]`
-  // (`tools: none` or a `tools:` with only `ext:` entries) → zero built-ins.
-  return config?.builtinToolNames ?? [...BUILTIN_TOOL_NAMES];
+  // `undefined` (definition omitted the field) → the default active set
+  // (read/bash/edit/write); an explicit `[]` (`tools: none` or a `tools:` with
+  // only `ext:` entries) → zero built-ins.
+  return config?.builtinToolNames ?? [...DEFAULT_BUILTIN_TOOL_NAMES];
 }
 
 /** Get config for a type (case-insensitive, returns a SubagentTypeConfig-compatible object). Falls back to general-purpose. */
@@ -154,7 +164,7 @@ export function getConfig(type: string): {
     return {
       displayName: config.displayName ?? config.name,
       description: config.description,
-      builtinToolNames: config.builtinToolNames ?? BUILTIN_TOOL_NAMES,
+      builtinToolNames: config.builtinToolNames ?? DEFAULT_BUILTIN_TOOL_NAMES,
       extensions: config.extensions,
       excludeExtensions: config.excludeExtensions,
       skills: config.skills,
@@ -168,7 +178,7 @@ export function getConfig(type: string): {
     return {
       displayName: gp.displayName ?? gp.name,
       description: gp.description,
-      builtinToolNames: gp.builtinToolNames ?? BUILTIN_TOOL_NAMES,
+      builtinToolNames: gp.builtinToolNames ?? DEFAULT_BUILTIN_TOOL_NAMES,
       extensions: gp.extensions,
       excludeExtensions: gp.excludeExtensions,
       skills: gp.skills,
@@ -180,7 +190,7 @@ export function getConfig(type: string): {
   return {
     displayName: "Agent",
     description: "General-purpose agent for complex, multi-step tasks",
-    builtinToolNames: BUILTIN_TOOL_NAMES,
+    builtinToolNames: DEFAULT_BUILTIN_TOOL_NAMES,
     extensions: true,
     skills: true,
     promptMode: "append",

@@ -5,7 +5,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { BUILTIN_TOOL_NAMES } from "./agent-types.js";
+import { BUILTIN_TOOL_NAMES, DEFAULT_BUILTIN_TOOL_NAMES } from "./agent-types.js";
 import type { AgentConfig, MemoryScope, ThinkingLevel } from "./types.js";
 
 /**
@@ -122,11 +122,12 @@ function csvList(val: unknown, defaults: string[]): string[] {
  * Partition the `tools:` CSV into the built-in tool allowlist and raw `ext:` selectors.
  * `*` (and the case-insensitive alias `all`, for `tools: all`) expands to all
  * built-ins; plain entries are built-in names; `ext:` entries are extension-tool
- * selectors parsed later by the runner. omitted → all built-ins, no selectors.
- * `tools:` present with only `ext:` entries → zero built-ins (use `*`).
+ * selectors parsed later by the runner. omitted → the main-agent default set
+ * (read/bash/edit/write), no selectors. `tools:` present with only `ext:`
+ * entries → zero built-ins (use `*`).
  */
 function parseToolsField(val: unknown): { builtinToolNames: string[]; extSelectors: string[] | undefined } {
-  const entries = csvList(val, BUILTIN_TOOL_NAMES);
+  const entries = csvList(val, DEFAULT_BUILTIN_TOOL_NAMES);
   const isWildcard = (e: string) => e === "*" || e.toLowerCase() === "all";
   const hasWildcard = entries.some(isWildcard);
   const plain = entries.filter(e => !isWildcard(e) && !e.startsWith("ext:"));
