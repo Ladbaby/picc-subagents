@@ -313,6 +313,22 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // Deliver a completion report so the main agent is told about it without
+  // being held up. pi's sendMessage routes by the agent's *current* streaming
+  // state at call time, not by the options we pass: when we're mid-run it
+  // queues a followUp and *silently ignores* `triggerTurn`; once the run ends
+  // nothing re-checks the queue, so a report sent during the run only surfaces
+  // on the next user prompt. So pick the delivery mode by liveness:
+  //   - busy  -> queue a plain followUp (drains when the run finishes)
+  //   - idle  -> deliver now with a real turn, so the report arrives at once
+  function deliverReport(content: string, details: NotificationDetails) {
+    const busy = currentCtx ? !currentCtx.isIdle() : false;
+    pi.sendMessage<NotificationDetails>(
+      { customType: "subagent-notification", content, display: true, details },
+      busy ? { deliverAs: "followUp" } : { deliverAs: "followUp", triggerTurn: true },
+    );
+  }
+
   // ---- Individual nudge helper (async join mode) ----
   function emitIndividualNudge(record: AgentRecord) {
     if (record.resultConsumed) return;  // re-check at send time
@@ -320,12 +336,7 @@ export default function (pi: ExtensionAPI) {
     const notification = formatTaskNotification(record);
     const footer = record.outputFile ? `\nFull transcript available at: ${record.outputFile}` : '';
 
-    pi.sendMessage<NotificationDetails>({
-      customType: "subagent-notification",
-      content: notification + footer,
-      display: true,
-      details: buildNotificationDetails(record, 500, agentActivity.get(record.id)),
-    }, { deliverAs: "followUp", triggerTurn: true });
+    deliverReport(notification + footer, buildNotificationDetails(record, 500, agentActivity.get(record.id)));
   }
 
   function sendIndividualNudge(record: AgentRecord) {
@@ -358,12 +369,7 @@ export default function (pi: ExtensionAPI) {
           details.others = rest.map(r => buildNotificationDetails(r, 300, agentActivity.get(r.id)));
         }
 
-        pi.sendMessage<NotificationDetails>({
-          customType: "subagent-notification",
-          content: `Background agent group completed: ${label}\n\n${notifications}`,
-          display: true,
-          details,
-        }, { deliverAs: "followUp", triggerTurn: true });
+        deliverReport(`Background agent group completed: ${label}\n\n${notifications}`, details);
       });
       widget.update();
     },
