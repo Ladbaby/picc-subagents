@@ -115,11 +115,14 @@ import {
   parseExtSelectors,
   resumeAgent,
   runAgent,
+  SUBAGENT_CHILD_SESSION_CREATED,
+  SUBAGENT_CHILD_DISPOSED,
 } from "../src/agent-runner.js";
 
 function createSession(finalText: string) {
   const listeners: Array<(event: any) => void> = [];
   const session = {
+    sessionId: "child-session-id",
     messages: [] as any[],
     subscribe: vi.fn((listener: (event: any) => void) => {
       listeners.push(listener);
@@ -146,10 +149,13 @@ const ctx = {
   model: undefined,
   modelRegistry: { find: vi.fn(), getAvailable: vi.fn(() => []) },
   getSystemPrompt: vi.fn(() => "parent prompt"),
-  sessionManager: { getBranch: vi.fn(() => []) },
+  sessionManager: {
+    getBranch: vi.fn(() => []),
+    getSessionId: vi.fn(() => "parent-session-id"),
+  },
 } as any;
 
-const pi = {} as any;
+const pi = { events: { emit: vi.fn() } } as any;
 
 beforeEach(() => {
   createAgentSession.mockReset();
@@ -160,6 +166,7 @@ beforeEach(() => {
   settingsManagerGetSessionDir.mockReset();
   settingsManagerGetSessionDir.mockReturnValue(undefined);
   settingsManagerCreate.mockClear();
+  pi.events.emit.mockClear();
   loaderExtensionsRef.current = { extensions: [], errors: [], runtime: {} };
 });
 
@@ -187,6 +194,68 @@ describe("agent-runner final output capture", () => {
     const bindOrder = session.bindExtensions.mock.invocationCallOrder[0];
     const promptOrder = session.prompt.mock.invocationCallOrder[0];
     expect(bindOrder).toBeLessThan(promptOrder);
+  });
+
+  it("does not write any PI_SUBAGENT_* / PI_PERMISSION_MODE env markers during a run", async () => {
+    // Regression: subagent headlessness is signaled via `ctx.hasUI === false`
+    // (no UI context bound for the child session), NOT by mutating the shared
+    // in-process `process.env`. Marking `process.env` used to leak the
+    // subagent flag across concurrent sessions, so `runAgent` must leave it
+    // untouched.
+    const { session } = createSession("CLEAN-ENV");
+    createAgentSession.mockResolvedValue({ session });
+    // Seed a value that a stale env-marker implementation would have clobbered.
+    process.env.PI_SUBAGENT_CHILD = "1";
+    process.env.PI_SUBAGENT_RUN_ID = "parent-session";
+    process.env.PI_PERMISSION_MODE = "bypassPermissions";
+    try {
+      await runAgent(ctx, "Explore", "go", { pi });
+      expect(process.env.PI_SUBAGENT_CHILD).toBe("1");
+      expect(process.env.PI_SUBAGENT_RUN_ID).toBe("parent-session");
+      expect(process.env.PI_PERMISSION_MODE).toBe("bypassPermissions");
+    } finally {
+      delete process.env.PI_SUBAGENT_CHILD;
+      delete process.env.PI_SUBAGENT_RUN_ID;
+      delete process.env.PI_PERMISSION_MODE;
+    }
+  });
+
+  it("emits child lifecycle events on the parent bus so the permission-system registry stays in sync", async () => {
+    // Regression: with the PI_SUBAGENT_* env channel removed, in-process child
+    // detection by `picc-permission-system` relies on the shared
+    // SubagentSessionRegistry, which is populated from these lifecycle events.
+    // `session-created` must fire on the PARENT bus before bindExtensions (so
+    // the child is registered before its own session_start) and carry the
+    // parentSessionId; `disposed` must fire at run end to clean up.
+    const { session } = createSession("LIFECYCLE");
+    createAgentSession.mockResolvedValue({ session });
+
+    await runAgent(ctx, "Explore", "go", { pi });
+
+    const createdCalls = pi.events.emit.mock.calls.filter(
+      (call) => call[0] === SUBAGENT_CHILD_SESSION_CREATED,
+    );
+    const disposedCalls = pi.events.emit.mock.calls.filter(
+      (call) => call[0] === SUBAGENT_CHILD_DISPOSED,
+    );
+    expect(createdCalls).toHaveLength(1);
+    expect(createdCalls[0][1]).toEqual({
+      sessionId: "child-session-id",
+      parentSessionId: "parent-session-id",
+    });
+    expect(disposedCalls).toHaveLength(1);
+    expect(disposedCalls[0][1]).toEqual({ sessionId: "child-session-id" });
+
+    // Ordering: created before bindExtensions, disposed after prompt.
+    // invocationCallOrder is a global counter shared across all mocks, so the
+    // numbers are directly comparable here.
+    const calls = pi.events.emit.mock.calls;
+    const emitOrder = (call: unknown) =>
+      pi.events.emit.mock.invocationCallOrder[calls.indexOf(call)];
+    const createdOrder = emitOrder(createdCalls[0]);
+    const disposedOrder = emitOrder(disposedCalls[0]);
+    expect(createdOrder).toBeLessThan(session.bindExtensions.mock.invocationCallOrder[0]);
+    expect(disposedOrder).toBeGreaterThanOrEqual(session.prompt.mock.invocationCallOrder[0]);
   });
 
   it("passes effective cwd and agentDir to the loader and settings manager", async () => {

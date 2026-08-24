@@ -40,6 +40,14 @@ export const SUBAGENT_TOOL_NAMES = {
 /** Names of tools registered by this extension that subagents must NOT inherit. */
 const EXCLUDED_TOOL_NAMES: string[] = Object.values(SUBAGENT_TOOL_NAMES);
 
+// In-process subagent lifecycle channels, declared here (and matched
+// independently by the permission-system consumer) so the two packages do not
+// depend on each other. Emitted on the PARENT's event bus (`options.pi.events`)
+// so only the parent's permission-system instance receives them and registers
+// the child in the process-global registry (the child's own bus is separate).
+export const SUBAGENT_CHILD_SESSION_CREATED = "subagents:child:session-created";
+export const SUBAGENT_CHILD_DISPOSED = "subagents:child:disposed";
+
 /**
  * Canonical name of an extension for `extensions: [...]` allowlist matching.
  * Lowercased — extension names match case-insensitively so `extensions: [Mcp]`
@@ -695,35 +703,42 @@ export async function runAgent(
     sessionOpts.thinkingLevel = thinkingLevel;
   }
 
-  // Subagent-child env signaling. The downstream permission gate reads
-  // `PI_SUBAGENT_CHILD` and `PI_SUBAGENT_RUN_ID` to flag this session as
-  // headless (see `extensions/pi-permission-modes/index.ts`
-  // `isSubagentChildEnv` and `@gotgenes/pi-permission-system`'s
-  // `SUBAGENT_ENV_HINT_KEYS`). Both keys must be set during
-  // `createAgentSession`, `bindExtensions`, and the actual prompt loop.
-  // Restore the previous values in the `finally` at the end of this
-  // function. Keys are nested under the existing runAgent scope so a
-  // thrown error doesn't leak the marker to the parent session.
-  const subagentParentSessionId = ctx.sessionManager?.getSessionId?.() ?? "";
-  const subagentEnvKeys = [
-    "PI_SUBAGENT_CHILD",
-    "PI_SUBAGENT_RUN_ID",
-  ] as const;
-  const envBackup: { key: string; prev: string | undefined }[] = [];
-  for (const key of subagentEnvKeys) {
-    envBackup.push({ key, prev: process.env[key] });
-    process.env[key] = key === "PI_SUBAGENT_CHILD"
-      ? "1"
-      : subagentParentSessionId;
-  }
+  // Subagent sessions are headless by construction: `createAgentSession`
+  // below is called without a UI context, so pi marks the child
+  // `ctx.hasUI === false` throughout its run. The downstream permission gate
+  // (`picc-permission-modes`) keys off that single signal to avoid prompting
+  // and to inherit the parent's published mode — no environment markers are
+  // needed. (The old `PI_SUBAGENT_CHILD` / `PI_SUBAGENT_RUN_ID` env channel
+  // was removed: it ran on the shared in-process `process.env` and leaked
+  // across sessions.)
+  //
+  // The authoritative in-process signal for the *policy* layer
+  // (`picc-permission-system`) is the shared SubagentSessionRegistry, kept in
+  // sync by the lifecycle events emitted below. `session-created` MUST fire
+  // synchronously before `bindExtensions` so the parent's permission-system
+  // registers the child before the child's own session_start runs;
+  // `disposed` fires in the run's finally so the entry is always cleaned up.
+  // Emitted on the parent bus (`options.pi.events`), not the child's, so only
+  // the parent's permission-system instance observes them.
 
-  try {
-    const { session } = await createAgentSession(sessionOpts);
+  const { session } = await createAgentSession(sessionOpts);
 
   const baseSessionName = agentConfig?.name ?? type;
   session.setSessionName(
     options.agentId ? `${baseSessionName}#${options.agentId.slice(0, 8)}` : baseSessionName,
   );
+
+  // Register this in-process child so the parent's permission-system can
+  // detect it via the shared registry and forward `ask` prompts to the
+  // parent's UI. `parentSessionId` is what the consumer resolves the
+  // forwarding target from.
+  const parentSessionId = ctx.sessionManager?.getSessionId?.() ?? undefined;
+  // Best-effort: a host that provides a minimal `pi` without an event bus
+  // (e.g. some SDK/test callers) simply skips the registry integration.
+  options.pi.events?.emit(SUBAGENT_CHILD_SESSION_CREATED, {
+    sessionId: session.sessionId,
+    ...(parentSessionId ? { parentSessionId } : {}),
+  });
 
   // Bind extensions so that session_start fires and extensions can initialize
   // (e.g. loading credentials, setting up state). Tool gating already happened
@@ -808,20 +823,15 @@ export async function runAgent(
     unsubTurns();
     collector.unsubscribe();
     cleanupAbort();
+    // Unregister the child so the parent's permission-system registry does
+    // not accumulate stale entries. Emitted on the parent bus, in the run's
+    // finally, so it fires on success, abort, and error alike. Best-effort
+    // (no-op) when the host provides no event bus.
+    options.pi.events?.emit(SUBAGENT_CHILD_DISPOSED, { sessionId: session.sessionId });
   }
 
   const responseText = collector.getText().trim() || getLastAssistantText(session, startLen);
   return { responseText, session, aborted, steered: softLimitReached, failure: finalTurnError(session, startLen) };
-  } finally {
-    // Restore the previous values of PI_SUBAGENT_CHILD / PI_SUBAGENT_RUN_ID
-    // even if `runAgent` throws, so a subagent crash doesn't leak the marker
-    // to the parent session. Keys are restored individually; an unset key is
-    // deleted rather than left as "".
-    for (const { key, prev } of envBackup) {
-      if (prev === undefined) delete process.env[key];
-      else process.env[key] = prev;
-    }
-  }
 }
 
 /**
