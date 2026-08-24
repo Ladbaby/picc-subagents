@@ -220,13 +220,13 @@ describe("agent-runner final output capture", () => {
     }
   });
 
-  it("emits child lifecycle events on the parent bus so the permission-system registry stays in sync", async () => {
+  it("emits child lifecycle events on the parent bus for any subagent-lifecycle consumer", async () => {
     // Regression: with the PI_SUBAGENT_* env channel removed, in-process child
-    // detection by `picc-permission-system` relies on the shared
-    // SubagentSessionRegistry, which is populated from these lifecycle events.
-    // `session-created` must fire on the PARENT bus before bindExtensions (so
-    // the child is registered before its own session_start) and carry the
-    // parentSessionId; `disposed` must fire at run end to clean up.
+    // detection relies on the subagent-lifecycle event contract (see the
+    // SUBAGENT_CHILD_* constants). `session-created` must fire on the PARENT
+    // bus before bindExtensions (so a consumer registers the child before its
+    // own session_start) and carry the parentSessionId; `disposed` must fire
+    // at run end to let the consumer clean up.
     const { session } = createSession("LIFECYCLE");
     createAgentSession.mockResolvedValue({ session });
 

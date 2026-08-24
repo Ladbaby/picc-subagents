@@ -40,11 +40,14 @@ export const SUBAGENT_TOOL_NAMES = {
 /** Names of tools registered by this extension that subagents must NOT inherit. */
 const EXCLUDED_TOOL_NAMES: string[] = Object.values(SUBAGENT_TOOL_NAMES);
 
-// In-process subagent lifecycle channels, declared here (and matched
-// independently by the permission-system consumer) so the two packages do not
+// In-process subagent lifecycle channels. These form a documented event
+// contract for any extension that wants to observe the subagent lifecycle
+// (e.g. a policy layer that registers in-process children and forwards
+// permission prompts to the parent UI). Consumers subscribe independently on
+// their own event bus; producers do not import them, so the two sides never
 // depend on each other. Emitted on the PARENT's event bus (`options.pi.events`)
-// so only the parent's permission-system instance receives them and registers
-// the child in the process-global registry (the child's own bus is separate).
+// so only the parent's extension instances observe a child's lifecycle (the
+// child's own bus is separate and never sees these).
 export const SUBAGENT_CHILD_SESSION_CREATED = "subagents:child:session-created";
 export const SUBAGENT_CHILD_DISPOSED = "subagents:child:disposed";
 
@@ -712,14 +715,13 @@ export async function runAgent(
   // was removed: it ran on the shared in-process `process.env` and leaked
   // across sessions.)
   //
-  // The authoritative in-process signal for the *policy* layer
-  // (`picc-permission-system`) is the shared SubagentSessionRegistry, kept in
-  // sync by the lifecycle events emitted below. `session-created` MUST fire
-  // synchronously before `bindExtensions` so the parent's permission-system
-  // registers the child before the child's own session_start runs;
+  // In addition, we emit subagent-lifecycle events on the parent bus so any
+  // consumer that wants in-process child visibility (a policy layer, an
+  // observability tool, ...) can observe it — see the channel constants above.
+  // `session-created` MUST fire synchronously before `bindExtensions` so a
+  // consumer registers the child before the child's own session_start runs;
   // `disposed` fires in the run's finally so the entry is always cleaned up.
-  // Emitted on the parent bus (`options.pi.events`), not the child's, so only
-  // the parent's permission-system instance observes them.
+  // These are best-effort: no live consumer means they are simple no-ops.
 
   const { session } = await createAgentSession(sessionOpts);
 
@@ -728,13 +730,13 @@ export async function runAgent(
     options.agentId ? `${baseSessionName}#${options.agentId.slice(0, 8)}` : baseSessionName,
   );
 
-  // Register this in-process child so the parent's permission-system can
-  // detect it via the shared registry and forward `ask` prompts to the
-  // parent's UI. `parentSessionId` is what the consumer resolves the
-  // forwarding target from.
+  // Announce the child so any consumer of the subagent-lifecycle contract can
+  // detect the in-process child and, e.g., forward `ask` prompts to the
+  // parent UI. `parentSessionId` lets a consumer resolve the forwarding
+  // target.
   const parentSessionId = ctx.sessionManager?.getSessionId?.() ?? undefined;
   // Best-effort: a host that provides a minimal `pi` without an event bus
-  // (e.g. some SDK/test callers) simply skips the registry integration.
+  // (e.g. some SDK/test callers) simply skips the lifecycle emission.
   options.pi.events?.emit(SUBAGENT_CHILD_SESSION_CREATED, {
     sessionId: session.sessionId,
     ...(parentSessionId ? { parentSessionId } : {}),
@@ -823,10 +825,10 @@ export async function runAgent(
     unsubTurns();
     collector.unsubscribe();
     cleanupAbort();
-    // Unregister the child so the parent's permission-system registry does
-    // not accumulate stale entries. Emitted on the parent bus, in the run's
-    // finally, so it fires on success, abort, and error alike. Best-effort
-    // (no-op) when the host provides no event bus.
+    // Announce the child's end of life so any consumer of the lifecycle
+    // contract can clean up its registry. Emitted on the parent bus, in the
+    // run's finally, so it fires on success, abort, and error alike.
+    // Best-effort (no-op) when the host provides no event bus.
     options.pi.events?.emit(SUBAGENT_CHILD_DISPOSED, { sessionId: session.sessionId });
   }
 
