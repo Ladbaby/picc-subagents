@@ -3,13 +3,13 @@
 [![npm downloads](https://img.shields.io/npm/dt/@ladbabynpm/picc-subagents.svg)](https://www.npmjs.com/package/@ladbabynpm/picc-subagents)
 
 Fork of [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents), adding
-`PI_SUBAGENT_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL` env-var model selection — see [Fork notes](#fork-notes-pi_subagent_model--claude_code_subagent_model).
+`PI_SUBAGENT_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL` env-var model selection, removing `get_subagent_result` and `steer_subagent` tools.
 To switch back to upstream, run `pi install npm:@tintinweb/pi-subagents`.
 
 Part of [picc](https://github.com/Ladbaby/picc), a pi agent setup mirroring Claude Code's harness.
 
 > pi has no built-in sub-agent concept. This extension adds one faithful to Claude Code: the
-> `Agent`, `get_subagent_result`, and `steer_subagent` tools, foreground + background runs, a
+> `Agent` tool, foreground + background runs, a
 > live widget and FleetView, custom agent types, mid-run steering, session resume, and a graceful
 > turn limit — all with Claude Code's names, calling conventions, and UI patterns.
 
@@ -37,25 +37,6 @@ Launch a sub-agent.
 | `isolation` | `"worktree"` | no | Run in an isolated git worktree |
 | `inherit_context` | boolean | no | Fork parent conversation into agent |
 | `schedule` | string | no | Fire later instead of now (cron / interval / one-shot) |
-
-### `get_subagent_result`
-
-Check status and retrieve results from a background agent.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `agent_id` | string | yes | Agent ID to check |
-| `wait` | boolean | no | Wait for completion |
-| `verbose` | boolean | no | Include full conversation log |
-
-### `steer_subagent`
-
-Inject a message into a running agent; it takes effect after the current tool finishes.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `agent_id` | string | yes | Agent ID to steer |
-| `message` | string | yes | Message to inject into the agent conversation |
 
 ## Scheduling
 
@@ -375,7 +356,7 @@ src/
 
 ## Fork notes (PI_SUBAGENT_MODEL / CLAUDE_CODE_SUBAGENT_MODEL)
 
-This local fork adds support for picking the **default subagent model from an environment
+This fork adds support for picking the **default subagent model from an environment
 variable**, mirroring claude-code's
 [`CLAUDE_CODE_SUBAGENT_MODEL`](https://docs.claude.com/en/docs/claude-code/subagents) hook.
 
