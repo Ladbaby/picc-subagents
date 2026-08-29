@@ -115,8 +115,8 @@ import {
   parseExtSelectors,
   resumeAgent,
   runAgent,
-  SUBAGENT_CHILD_SESSION_CREATED,
   SUBAGENT_CHILD_DISPOSED,
+  SUBAGENT_CHILD_SESSION_CREATED,
 } from "../src/agent-runner.js";
 
 function createSession(finalText: string) {
