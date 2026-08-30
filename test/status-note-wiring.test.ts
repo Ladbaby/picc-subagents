@@ -51,6 +51,7 @@ async function bind(lifecycle: Map<string, any>) {
 function ctx() {
   return {
     hasUI: false,
+    isIdle: vi.fn(() => true),
     ui: { setStatus: vi.fn(), setWidget: vi.fn(), notify: vi.fn() },
     cwd: "/tmp",
     model: undefined,

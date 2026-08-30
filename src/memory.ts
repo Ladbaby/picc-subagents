@@ -9,7 +9,7 @@
 
 import { existsSync, lstatSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, } from "node:path";
+import { posix } from "node:path";
 import type { MemoryScope } from "./types.js";
 
 /** Maximum lines to read from MEMORY.md */
@@ -52,18 +52,27 @@ export function safeReadFile(filePath: string): string | undefined {
 /**
  * Resolve the memory directory path for a given agent + scope + cwd.
  * Throws if agentName contains path traversal characters.
+ *
+ * Path math uses `path.posix` so the result always uses forward slashes (the
+ * package's documented convention: `~/.pi/...`, `.pi/...`). On Windows the
+ * native home carries backslashes; those are re-normalized to `/` since Node's
+ * fs APIs accept forward slashes on all platforms.
  */
+function posixHome(): string {
+  return homedir().replaceAll("\\", "/");
+}
+
 export function resolveMemoryDir(agentName: string, scope: MemoryScope, cwd: string): string {
   if (isUnsafeName(agentName)) {
     throw new Error(`Unsafe agent name for memory directory: "${agentName}"`);
   }
   switch (scope) {
     case "user":
-      return join(homedir(), ".pi", "agent-memory", agentName);
+      return posix.join(posixHome(), ".pi", "agent-memory", agentName);
     case "project":
-      return join(cwd, ".pi", "agent-memory", agentName);
+      return posix.join(cwd, ".pi", "agent-memory", agentName);
     case "local":
-      return join(cwd, ".pi", "agent-memory-local", agentName);
+      return posix.join(cwd, ".pi", "agent-memory-local", agentName);
   }
 }
 
@@ -91,7 +100,7 @@ export function readMemoryIndex(memoryDir: string): string | undefined {
   // Reject symlinked memory directories
   if (isSymlink(memoryDir)) return undefined;
 
-  const memoryFile = join(memoryDir, "MEMORY.md");
+  const memoryFile = posix.join(memoryDir, "MEMORY.md");
   const content = safeReadFile(memoryFile);
   if (content === undefined) return undefined;
 
@@ -122,7 +131,7 @@ This memory persists across sessions. Use it to build up knowledge over time.`;
 
   const memoryContent = existingMemory
     ? `\n\n## Current MEMORY.md\n${existingMemory}`
-    : `\n\nNo MEMORY.md exists yet. Create one at ${join(memoryDir, "MEMORY.md")} to start building persistent memory.`;
+    : `\n\nNo MEMORY.md exists yet. Create one at ${posix.join(memoryDir, "MEMORY.md")} to start building persistent memory.`;
 
   const instructions = `
 

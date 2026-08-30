@@ -4,7 +4,7 @@
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, posix, resolve } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import { cleanupSessionResources } from "@earendil-works/pi-ai";
 import type { ExtensionContext, LoadExtensionsResult } from "@earendil-works/pi-coding-agent";
@@ -161,7 +161,7 @@ export function parseExtensionsSpec(
     if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) {
       p = homedir() + p.slice(1);
     }
-    const abs = isAbsolute(p) ? p : resolve(cwd, p);
+    const abs = resolveAgainstCwd(p, cwd);
     paths.push(abs);
     names.add(extensionCanonicalName(abs));
   }
@@ -409,11 +409,28 @@ function forwardAbortSignal(session: AgentSession, signal?: AbortSignal): () => 
   return () => signal.removeEventListener("abort", onAbort);
 }
 
+/**
+ * Resolve `p` against `cwd`, choosing the path module to match the input's
+ * platform. A Windows-style cwd (`C:\...`) resolves natively so the result stays
+ * valid for downstream fs / pi loaders; a POSIX cwd (as in tests, e.g. `/work`)
+ * resolves with `path.posix` so it keeps its POSIX shape instead of being
+ * re-rooted onto `C:\` by the native resolver.
+ */
+function isWindowsPath(p: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(p);
+}
+
+function resolveAgainstCwd(p: string, cwd: string): string {
+  if (isAbsolute(p) || posix.isAbsolute(p)) return p; // already absolute
+  return (isWindowsPath(cwd) ? resolve : posix.resolve)(cwd, p);
+}
+
 function resolveConfiguredSessionDir(sessionDir: string | undefined, cwd: string): string | undefined {
   if (!sessionDir) return undefined;
+  // `~` is expanded against the host home (native, so it stays valid on disk).
   if (sessionDir === "~" || sessionDir.startsWith("~/")) return resolve(homedir(), sessionDir.slice(2));
   if (isAbsolute(sessionDir)) return sessionDir;
-  return resolve(cwd, sessionDir);
+  return resolveAgainstCwd(sessionDir, cwd);
 }
 
 export async function runAgent(

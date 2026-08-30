@@ -11,7 +11,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, posix } from "node:path";
 import type { ScheduledSubagent, ScheduleStoreData } from "./types.js";
 
 const LOCK_RETRY_MS = 50;
@@ -51,7 +51,7 @@ function releaseLock(lockPath: string): void {
 
 /** Resolve the storage path for a session-scoped store. */
 export function resolveStorePath(cwd: string, sessionId: string): string {
-  return join(cwd, ".pi", "subagent-schedules", `${sessionId}.json`);
+  return posix.join(cwd, ".pi", "subagent-schedules", `${sessionId}.json`);
 }
 
 export class ScheduleStore {
