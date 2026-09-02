@@ -3,7 +3,7 @@
 [![npm downloads](https://img.shields.io/npm/dt/@ladbabynpm/picc-subagents.svg)](https://www.npmjs.com/package/@ladbabynpm/picc-subagents)
 
 Fork of [`@tintinweb/pi-subagents`](https://github.com/tintinweb/pi-subagents), adding
-`PI_SUBAGENT_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL` env-var model selection, removing `get_subagent_result` and `steer_subagent` tools.
+`PICC_SUBAGENTS_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL` env-var model selection, removing `get_subagent_result` and `steer_subagent` tools.
 To switch back to upstream, run `pi install npm:@tintinweb/pi-subagents`.
 
 Part of [picc](https://github.com/Ladbaby/picc), a pi agent setup mirroring Claude Code's harness.
@@ -348,13 +348,13 @@ src/
   prompts.ts          # Config-driven system prompt builder
   context.ts          # Parent conversation context for inherit_context
   env.ts              # Environment detection (git, platform)
-  subagent-env.ts     # PI_SUBAGENT_MODEL / CLAUDE_CODE_SUBAGENT_MODEL overrides (fork)
+  subagent-env.ts     # PICC_SUBAGENTS_MODEL / CLAUDE_CODE_SUBAGENT_MODEL overrides (fork)
   ui/
     agent-widget.ts       # Persistent widget: spinners, activity, status icons, theming
     conversation-viewer.ts # Live conversation overlay for viewing agent sessions
 ```
 
-## Fork notes (PI_SUBAGENT_MODEL / CLAUDE_CODE_SUBAGENT_MODEL)
+## Fork notes (PICC_SUBAGENTS_MODEL / CLAUDE_CODE_SUBAGENT_MODEL)
 
 This fork adds support for picking the **default subagent model from an environment
 variable**, mirroring claude-code's
@@ -362,8 +362,8 @@ variable**, mirroring claude-code's
 
 | Variable | Precedence | Notes |
 |---|---|---|
-| `PI_SUBAGENT_MODEL` | 1 (highest) | Fork-specific. |
-| `CLAUDE_CODE_SUBAGENT_MODEL` | 2 | claude-code-compatible; ignored when `PI_SUBAGENT_MODEL` is set. |
+| `PICC_SUBAGENTS_MODEL` | 1 (highest) | Fork-specific. |
+| `CLAUDE_CODE_SUBAGENT_MODEL` | 2 | claude-code-compatible; ignored when `PICC_SUBAGENTS_MODEL` is set. |
 | _unset_ | — | Falls back to existing precedence: caller `Agent({model})` > frontmatter `model:` > inherit parent. |
 
 The chosen model **overrides everything** — frontmatter pins and `Agent` `model:` parameters —
@@ -374,6 +374,6 @@ rather than silently falling back; whitespace-only values are treated as unset. 
 `Agent` calls; cross-extension RPC callers pick up the same vars in their own process.
 
 ```bash
-export PI_SUBAGENT_MODEL=haiku                                  # always run subagents on haiku
+export PICC_SUBAGENTS_MODEL=haiku                                  # always run subagents on haiku
 export CLAUDE_CODE_SUBAGENT_MODEL=anthropic/claude-haiku-4-5    # claude-code-compatible
 ```
