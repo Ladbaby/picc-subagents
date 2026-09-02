@@ -1011,7 +1011,7 @@ Terse command-style prompts produce shallow, generic work.
 
       // Resolve model from agent config first; tool-call params only fill gaps.
       let model = ctx.model;
-      // Env-var override: PI_SUBAGENT_MODEL (fork) takes precedence over
+      // Env-var override: PICC_SUBAGENTS_MODEL (fork) takes precedence over
       // CLAUDE_CODE_SUBAGENT_MODEL (claude-code-compatible). When set, this is
       // authoritative — it overrides frontmatter `model:` pins and caller
       // `model:` params. Mirrors the `CLAUDE_CODE_SUBAGENT_MODEL` hook in

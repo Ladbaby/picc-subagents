@@ -2,7 +2,7 @@
  * agent-index-env-model.test.ts
  *
  * Verifies the env-var hook in the `Agent`-tool handler:
- *   - PI_SUBAGENT_MODEL / CLAUDE_CODE_SUBAGENT_MODEL override frontmatter `model:`
+ *   - PICC_SUBAGENTS_MODEL / CLAUDE_CODE_SUBAGENT_MODEL override frontmatter `model:`
  *     and `Agent({model: ...})` params.
  *   - Unresolvable env var surfaces a tool error (no silent fallback to parent).
  *   - When neither is set, the existing precedence (caller > config > parent)
@@ -23,7 +23,7 @@ vi.mock("../src/agent-runner.js", async () => {
 
 import { runAgent } from "../src/agent-runner.js";
 import subagentsExtension from "../src/index.js";
-import { CLAUDE_CODE_SUBAGENT_MODEL_ENV, PI_SUBAGENT_MODEL_ENV } from "../src/subagent-env.js";
+import { CLAUDE_CODE_SUBAGENT_MODEL_ENV, PICC_SUBAGENTS_MODEL_ENV } from "../src/subagent-env.js";
 
 function makePi() {
   const tools = new Map<string, any>();
@@ -113,29 +113,29 @@ function teardownHarness(h: Harness) {
   rmSync(h.agentDir, { recursive: true, force: true });
 }
 
-describe("Agent-tool: PI_SUBAGENT_MODEL / CLAUDE_CODE_SUBAGENT_MODEL override", () => {
+describe("Agent-tool: PICC_SUBAGENTS_MODEL / CLAUDE_CODE_SUBAGENT_MODEL override", () => {
   let harness: Harness;
   let prevAgent: string | undefined;
   let prevClaude: string | undefined;
 
   beforeEach(async () => {
     harness = await setupHarness();
-    prevAgent = process.env[PI_SUBAGENT_MODEL_ENV];
+    prevAgent = process.env[PICC_SUBAGENTS_MODEL_ENV];
     prevClaude = process.env[CLAUDE_CODE_SUBAGENT_MODEL_ENV];
-    delete process.env[PI_SUBAGENT_MODEL_ENV];
+    delete process.env[PICC_SUBAGENTS_MODEL_ENV];
     delete process.env[CLAUDE_CODE_SUBAGENT_MODEL_ENV];
   });
 
   afterEach(() => {
-    if (prevAgent === undefined) delete process.env[PI_SUBAGENT_MODEL_ENV];
-    else process.env[PI_SUBAGENT_MODEL_ENV] = prevAgent;
+    if (prevAgent === undefined) delete process.env[PICC_SUBAGENTS_MODEL_ENV];
+    else process.env[PICC_SUBAGENTS_MODEL_ENV] = prevAgent;
     if (prevClaude === undefined) delete process.env[CLAUDE_CODE_SUBAGENT_MODEL_ENV];
     else process.env[CLAUDE_CODE_SUBAGENT_MODEL_ENV] = prevClaude;
     teardownHarness(harness);
   });
 
-  it("PI_SUBAGENT_MODEL overrides parent and frontmatter (haiku chosen)", async () => {
-    process.env[PI_SUBAGENT_MODEL_ENV] = "haiku";
+  it("PICC_SUBAGENTS_MODEL overrides parent and frontmatter (haiku chosen)", async () => {
+    process.env[PICC_SUBAGENTS_MODEL_ENV] = "haiku";
     vi.mocked(runAgent).mockReset();
     vi.mocked(runAgent).mockResolvedValue({
       responseText: "ok",
@@ -163,7 +163,7 @@ describe("Agent-tool: PI_SUBAGENT_MODEL / CLAUDE_CODE_SUBAGENT_MODEL override", 
     expect(passedModel?.provider).toBe(HAIKU.provider);
   });
 
-  it("CLAUDE_CODE_SUBAGENT_MODEL applies when PI_SUBAGENT_MODEL is unset", async () => {
+  it("CLAUDE_CODE_SUBAGENT_MODEL applies when PICC_SUBAGENTS_MODEL is unset", async () => {
     process.env[CLAUDE_CODE_SUBAGENT_MODEL_ENV] = "sonnet";
     vi.mocked(runAgent).mockReset();
     vi.mocked(runAgent).mockResolvedValue({
@@ -186,8 +186,8 @@ describe("Agent-tool: PI_SUBAGENT_MODEL / CLAUDE_CODE_SUBAGENT_MODEL override", 
     expect(call[3]?.model?.id).toBe(SONNET.id);
   });
 
-  it("PI_SUBAGENT_MODEL takes precedence over CLAUDE_CODE_SUBAGENT_MODEL", async () => {
-    process.env[PI_SUBAGENT_MODEL_ENV] = "haiku";
+  it("PICC_SUBAGENTS_MODEL takes precedence over CLAUDE_CODE_SUBAGENT_MODEL", async () => {
+    process.env[PICC_SUBAGENTS_MODEL_ENV] = "haiku";
     process.env[CLAUDE_CODE_SUBAGENT_MODEL_ENV] = "sonnet";
     vi.mocked(runAgent).mockReset();
     vi.mocked(runAgent).mockResolvedValue({
@@ -211,7 +211,7 @@ describe("Agent-tool: PI_SUBAGENT_MODEL / CLAUDE_CODE_SUBAGENT_MODEL override", 
   });
 
   it("env var overrides caller-supplied Agent({model: ...}) param", async () => {
-    process.env[PI_SUBAGENT_MODEL_ENV] = "haiku";
+    process.env[PICC_SUBAGENTS_MODEL_ENV] = "haiku";
     vi.mocked(runAgent).mockReset();
     vi.mocked(runAgent).mockResolvedValue({
       responseText: "ok",
@@ -235,7 +235,7 @@ describe("Agent-tool: PI_SUBAGENT_MODEL / CLAUDE_CODE_SUBAGENT_MODEL override", 
   });
 
   it("unresolvable env var surfaces a tool error (no silent fallback)", async () => {
-    process.env[PI_SUBAGENT_MODEL_ENV] = "no-such-model-xyz";
+    process.env[PICC_SUBAGENTS_MODEL_ENV] = "no-such-model-xyz";
     vi.mocked(runAgent).mockReset();
     const registry = makeRegistry([HAIKU, SONNET, PARENT_OPUS]);
     const result = await harness.tools.get("Agent").execute(

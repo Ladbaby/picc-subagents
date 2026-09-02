@@ -7,12 +7,12 @@
  *   - `model:` parameters supplied to the `Agent` tool by the orchestrator
  *   - the parent thread's model (i.e. "inherit")
  *
- * Precedence: PI_SUBAGENT_MODEL (fork-specific) > CLAUDE_CODE_SUBAGENT_MODEL
+ * Precedence: PICC_SUBAGENTS_MODEL (fork-specific) > CLAUDE_CODE_SUBAGENT_MODEL
  * (claude-code-compatible) > undefined (caller falls through to existing
  * resolution in `agent-runner.ts` / `index.ts`).
  */
 
-export const PI_SUBAGENT_MODEL_ENV = "PI_SUBAGENT_MODEL";
+export const PICC_SUBAGENTS_MODEL_ENV = "PICC_SUBAGENTS_MODEL";
 export const CLAUDE_CODE_SUBAGENT_MODEL_ENV = "CLAUDE_CODE_SUBAGENT_MODEL";
 
 /**
@@ -27,7 +27,7 @@ export const CLAUDE_CODE_SUBAGENT_MODEL_ENV = "CLAUDE_CODE_SUBAGENT_MODEL";
  * @returns The env-var value, or `undefined` when neither is set.
  */
 export function pickSubagentEnvModel(): string | undefined {
-  const pi = process.env[PI_SUBAGENT_MODEL_ENV];
+  const pi = process.env[PICC_SUBAGENTS_MODEL_ENV];
   if (pi && pi.trim().length > 0) return pi.trim();
 
   const claude = process.env[CLAUDE_CODE_SUBAGENT_MODEL_ENV];
@@ -37,7 +37,7 @@ export function pickSubagentEnvModel(): string | undefined {
 }
 
 /**
- * Whether the resolved model came from an env var (PI_SUBAGENT_MODEL or
+ * Whether the resolved model came from an env var (PICC_SUBAGENTS_MODEL or
  * CLAUDE_CODE_SUBAGENT_MODEL). Useful for display-labeling and for skipping
  * scope-validation against the user's `enabledModels` allowlist, since the
  * user explicitly asked for this model via environment.
@@ -47,6 +47,6 @@ export function pickSubagentEnvModel(): string | undefined {
  */
 export function isEnvSourcedModel(rawInput: string | undefined): boolean {
   if (!rawInput) return false;
-  return rawInput === process.env[PI_SUBAGENT_MODEL_ENV]?.trim()
+  return rawInput === process.env[PICC_SUBAGENTS_MODEL_ENV]?.trim()
     || rawInput === process.env[CLAUDE_CODE_SUBAGENT_MODEL_ENV]?.trim();
 }
