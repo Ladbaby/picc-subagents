@@ -1,6 +1,6 @@
 {
 	"name": "@ladbabynpm/picc-subagents",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "Claude Code style Agent tool for pi agent. Fork of tintinweb/pi-subagents, better aligned with the harness of Claude Code.",
 	"author": "ladbabynpm",
 	"license": "MIT",
@@ -32,10 +32,10 @@
 	"peerDependencies": {
 		"@earendil-works/pi-ai": ">=0.80.0",
 		"@earendil-works/pi-coding-agent": ">=0.80.0",
-		"@earendil-works/pi-tui": ">=0.80.0"
+		"@earendil-works/pi-tui": ">=0.80.0",
+		"@sinclair/typebox": "*"
 	},
 	"dependencies": {
-		"@sinclair/typebox": "^0.34.49",
 		"croner": "^10.0.1",
 		"nanoid": "^5.0.0"
 	},
