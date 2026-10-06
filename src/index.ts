@@ -313,19 +313,21 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  // Deliver a completion report so the main agent is told about it without
-  // being held up. pi's sendMessage routes by the agent's *current* streaming
-  // state at call time, not by the options we pass: when we're mid-run it
-  // queues a followUp and *silently ignores* `triggerTurn`; once the run ends
-  // nothing re-checks the queue, so a report sent during the run only surfaces
-  // on the next user prompt. So pick the delivery mode by liveness:
-  //   - busy  -> queue a plain followUp (drains when the run finishes)
-  //   - idle  -> deliver now with a real turn, so the report arrives at once
+  // Deliver a completion report so the main agent learns about it without being
+  // interrupted mid-work. `triggerTurn` must ALWAYS be set: pi routes by the
+  // session's live state at call time, and without it an idle session takes the
+  // final branch of `sendCustomMessage` — appended to the session with no turn
+  // and never queued — so the report would wait for the next user prompt.
+  // With it, both states work without inspecting liveness ourselves:
+  //   - streaming -> queued as followUp, drained when the run's tool loop ends
+  //     (equivalent to Claude Code's `later` priority: end-of-turn, no interrupt)
+  //   - idle      -> starts a turn immediately, so the report arrives at once
+  // Deriving this from `ctx.isIdle()` is a trap: `currentCtx` is captured at
+  // tool_execution_start, so it can report "busy" after the run already ended.
   function deliverReport(content: string, details: NotificationDetails) {
-    const busy = currentCtx ? !currentCtx.isIdle() : false;
     pi.sendMessage<NotificationDetails>(
       { customType: "subagent-notification", content, display: true, details },
-      busy ? { deliverAs: "followUp" } : { deliverAs: "followUp", triggerTurn: true },
+      { deliverAs: "followUp", triggerTurn: true },
     );
   }
 
@@ -375,6 +377,25 @@ export default function (pi: ExtensionAPI) {
     },
     30_000,
   );
+
+  // Flush held group results the moment the main agent's turn settles.
+  //
+  // Without this, a finished agent in a smart/group batch waits for its siblings
+  // or for the 30s join timeout even though the main agent has gone idle and
+  // nothing can consume the result until a new turn starts — the hold is pure
+  // added latency. Claude Code behaves the same way: it drains whichever task
+  // notifications are already queued when the turn ends, and never blocks on
+  // unfinished siblings.
+  //
+  // `agent_settled` (not `agent_end`) is the correct boundary: agent_end can
+  // still be followed by an automatic retry, auto-compaction, or a queued
+  // follow-up continuation, during which the main agent is still working and the
+  // group hold is still doing its job. Flushing here cannot loop — our own
+  // notification triggers a further run, and that run's settle finds nothing left
+  // to flush.
+  pi.on("agent_settled", async () => {
+    groupJoin.flush();
+  });
 
   /** Helper: build event data for lifecycle events from an AgentRecord. */
   function buildEventData(record: AgentRecord) {

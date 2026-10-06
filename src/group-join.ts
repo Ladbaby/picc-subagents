@@ -4,6 +4,10 @@
  * Instead of each agent individually nudging the main agent on completion,
  * agents in a group are held until all complete (or a timeout fires),
  * then a single consolidated notification is sent.
+ *
+ * The hold is bounded by the main agent's own turn: `flush()` is called when
+ * that turn settles, because from that point on a held result is only latency —
+ * see the method for the full reasoning.
  */
 
 import type { AgentRecord } from "./types.js";
@@ -124,6 +128,34 @@ export class GroupJoinManager {
       this.agentToGroup.delete(id);
     }
     this.groups.delete(groupId);
+  }
+
+  /**
+   * Deliver every held record immediately and release the remaining members so
+   * each notifies on its own.
+   *
+   * Called when the main agent's turn settles. At that point a held result is
+   * pure added latency: nothing consumes it until a new turn starts, so waiting
+   * for siblings or for the join timeout buys nothing. This mirrors Claude Code,
+   * which drains whichever task notifications are already queued when the turn
+   * ends and never blocks on unfinished siblings.
+   *
+   * Records are delivered as partial, because by definition siblings were still
+   * running when the turn ended. `deliver()` clears the timer and drops every
+   * agentToGroup entry for the group, so still-running members become ungrouped
+   * and report individually — the hold is deliberately not re-armed for them.
+   *
+   * @returns the number of records delivered.
+   */
+  flush(): number {
+    // deliver() deletes from this.groups, so iterate over a snapshot.
+    let delivered = 0;
+    for (const group of [...this.groups.values()]) {
+      if (group.delivered || group.completedRecords.size === 0) continue;
+      delivered += group.completedRecords.size;
+      this.deliver(group, true);
+    }
+    return delivered;
   }
 
   /** Check if an agent is in a group. */

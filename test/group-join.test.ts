@@ -150,4 +150,63 @@ describe("GroupJoinManager", () => {
     expect(mgr.isGrouped("a")).toBe(false);
     expect(mgr.isGrouped("b")).toBe(false);
   });
+
+  describe("flush()", () => {
+    it("delivers held records as partial and releases the remaining members", () => {
+      const deliver = vi.fn();
+      const mgr = new GroupJoinManager(deliver, 30_000);
+      mgr.registerGroup("g", ["a", "b", "c"]);
+
+      mgr.onAgentComplete(makeRecord("a", { result: "A" }));
+      expect(mgr.flush()).toBe(1);
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      const [records, partial] = deliver.mock.calls[0];
+      expect(records.map((r: AgentRecord) => r.id)).toEqual(["a"]);
+      // Siblings were still running when the turn settled.
+      expect(partial).toBe(true);
+
+      // The still-running members are ungrouped, so each reports on its own
+      // rather than waiting on a sibling that may be far behind.
+      expect(mgr.onAgentComplete(makeRecord("b"))).toBe("pass");
+      expect(mgr.onAgentComplete(makeRecord("c"))).toBe("pass");
+    });
+
+    it("cancels the join timer so the timeout cannot deliver the same record twice", () => {
+      const deliver = vi.fn();
+      const mgr = new GroupJoinManager(deliver, 30_000);
+      mgr.registerGroup("g", ["a", "b"]);
+
+      mgr.onAgentComplete(makeRecord("a"));
+      mgr.flush();
+      expect(deliver).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(60_000);
+      expect(deliver).toHaveBeenCalledTimes(1);
+    });
+
+    it("is a no-op when nothing is held", () => {
+      const deliver = vi.fn();
+      const mgr = new GroupJoinManager(deliver);
+
+      expect(mgr.flush()).toBe(0);
+
+      // A group whose members are all still running holds no records yet.
+      mgr.registerGroup("g", ["a", "b"]);
+      expect(mgr.flush()).toBe(0);
+      expect(deliver).not.toHaveBeenCalled();
+    });
+
+    it("clears every group that is holding records", () => {
+      const deliver = vi.fn();
+      const mgr = new GroupJoinManager(deliver, 30_000);
+      mgr.registerGroup("g1", ["a", "b"]);
+      mgr.registerGroup("g2", ["c", "d"]);
+      mgr.onAgentComplete(makeRecord("a"));
+      mgr.onAgentComplete(makeRecord("c"));
+
+      expect(mgr.flush()).toBe(2);
+      expect(deliver).toHaveBeenCalledTimes(2);
+    });
+  });
 });
