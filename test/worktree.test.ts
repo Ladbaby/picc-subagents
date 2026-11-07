@@ -2,8 +2,16 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupWorktree, createWorktree, pruneWorktrees } from "../src/worktree.js";
+
+// Every test here shells out to real `git` in a throwaway repo, so one test
+// already costs ~1-2s of process spawns. Under full-suite load (40 other files
+// running in parallel) a test can exceed vitest's 5s default and fail as a
+// timeout even though nothing is wrong — it reproduces via `npm run test` but
+// not via `vitest run test/worktree.test.ts`. Same override as the other slow
+// suites (the e2e files).
+vi.setConfig({ testTimeout: 30_000 });
 
 /**
  * Helper: create a temporary git repo with an initial commit.
